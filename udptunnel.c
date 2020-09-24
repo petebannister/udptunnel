@@ -7,13 +7,21 @@
 #include <string.h>
 #include <errno.h>
 #include <signal.h>
-#include <sys/time.h>
 #include <sys/types.h>
-#include <unistd.h>
 #include <fcntl.h>
+
+#ifdef _WIN32
+#include <stdint.h>
+#include <winsock2.h>
+#include <Windows.h>
+#include "getopt_win.h"
+#else
+#include <sys/time.h>
+#include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#endif
 
 #include "host2ip.h"
 
@@ -22,10 +30,57 @@
 
 #define SET_MAX(fd) do { if (max < (fd) + 1) { max = (fd) + 1; } } while (0)
 
+#ifdef _WIN32
+typedef uint16_t u_int16;
+typedef uint32_t socklen_t;
+#else
 #if (SIZEOF_SHORT == 2)
 typedef unsigned short u_int16;
 #else
 #error Need a typedef for a 16-bit type
+#endif
+#endif
+
+#ifdef _WIN32
+#define perror p_wsa_error
+#define exit wsa_exit
+
+static void wsa_exit(int code) {
+  WSACleanup();
+  exit(code);
+}
+
+static void p_wsa_error(char const* msg) {
+  int ec = WSAGetLastError();
+  char* errtext = 0;
+
+  FormatMessageA(
+      FORMAT_MESSAGE_ALLOCATE_BUFFER |
+      FORMAT_MESSAGE_FROM_SYSTEM |
+      FORMAT_MESSAGE_IGNORE_INSERTS,
+      NULL,
+      ec,
+      0,
+      (LPSTR)&errtext, /* pointer to pointer due to FORMAT_MESSAGE_ALLOCATE_BUFFER */
+      0,
+      NULL
+  );
+  fputs(msg, stderr);
+  if (errtext) {
+    fprintf(stderr, "WSA error %d: %s", ec, errtext);
+    LocalFree(errtext);
+  }
+  else {
+    fprintf(stderr, "WSA error %d", ec);
+  }
+}
+
+int read(SOCKET fd, void *buf, size_t count)
+{
+  return recv(fd, (char*)buf, count, 0 /*flags*/);
+}
+#else
+typedef int SOCKET;
 #endif
 
 typedef unsigned char u_int8;
@@ -41,10 +96,10 @@ struct relay {
   u_int8 udp_ttl;
   int multicast_udp;
 
-  int udp_send_sock;
-  int udp_recv_sock;
-  int tcp_listen_sock;
-  int tcp_sock;
+  SOCKET udp_send_sock;
+  SOCKET udp_recv_sock;
+  SOCKET tcp_listen_sock;
+  SOCKET tcp_sock;
 
   char buf[TCPBUFFERSIZE];
   char *buf_ptr, *packet_start;
@@ -612,6 +667,13 @@ int main(int argc, char *argv[])
   fd_set readfds;
   int max = 0;
   int ok;
+
+#ifdef _WIN32
+  WSADATA wsaData;
+  if (WSAStartup(0x0101, &wsaData) != 0) {
+      perror("WSAStartup failure.");
+  }
+#endif
 
   parse_args(argc, argv, &relays, &relay_count, &is_server);
 
