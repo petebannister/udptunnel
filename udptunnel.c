@@ -81,6 +81,7 @@ int read(SOCKET fd, void *buf, size_t count)
 }
 #else
 typedef int SOCKET;
+#define INVALID_SOCKET -1
 #endif
 
 typedef unsigned char u_int8;
@@ -104,12 +105,15 @@ struct relay {
   char buf[TCPBUFFERSIZE];
   char *buf_ptr, *packet_start;
   int packet_length;
+  int bound_mode;
   enum {uninitialized = 0, reading_length, reading_packet} state;
 };
 
 static int debug = 0;
 static int udp_recv_only = 0;
 static int udp_send_only = 0;
+static int bound_mode = 0;
+static struct sockaddr_in remote_udpaddr;
 
 /*
  * usage()
@@ -118,10 +122,11 @@ static int udp_send_only = 0;
 static void usage(char *progname) {
   fprintf(stderr, "Usage: %s -s TCP-port [-r] [-v] UDP-addr/UDP-port[/ttl]\n",
           progname);
-  fprintf(stderr, "    or %s -c TCP-addr[/TCP-port] [-r] [-v] UDP-addr/UDP-port[/ttl]\n",
+  fprintf(stderr, "    or %s -c TCP-addr[/TCP-port] [-r] [-b] [-v] UDP-addr/UDP-port[/ttl]\n",
           progname);
   fprintf(stderr, "     -s: Server mode.  Wait for TCP connections on the port.\n");
   fprintf(stderr, "     -c: Client mode.  Connect to the given address.\n");
+  fprintf(stderr, "     -b: Bound mode.  UDP messages relayed to sender (recv_from).  Allows bind address of 0.0.0.0 for UDP\n");
   fprintf(stderr, "     -r: RTP mode.  Connect/listen on ports N and N+1 for both UDP and TCP.\n");
   fprintf(stderr, "         Port numbers must be even.\n");
   fprintf(stderr, "     -R: UDP receive-only. For unidirectional tunneling.\n");
@@ -153,7 +158,7 @@ static void parse_args(int argc, char *argv[], struct relay **relays,
   tcphostname = NULL;
   tcpportstr = NULL;
 
-  while ((c = getopt(argc, argv, "s:c:rvhRS")) != EOF) {
+  while ((c = getopt(argc, argv, "s:c:rvhbRS")) != EOF) {
     switch (c) {
     case 's':
       if (*is_server != -1) {
@@ -175,6 +180,9 @@ static void parse_args(int argc, char *argv[], struct relay **relays,
       break;
     case 'r':
       *relay_count = 2;
+      break;
+    case 'b':
+      bound_mode = 1;
       break;
     case 'v':
       debug++;
@@ -256,7 +264,8 @@ static void parse_args(int argc, char *argv[], struct relay **relays,
 
   udpaddr = host2ip(udphostname);
   if (udpaddr.s_addr == INADDR_ANY) {
-    if (strcmp(udphostname, "0.0.0.0") != 0) { // <pb> allow all interfaces udp bind
+    int is_all_bind = (strcmp(udphostname, "0.0.0.0") != 0);    
+    if (!bound_mode && !is_all_bind) {
       fprintf(stderr, "%s: UDP host unknown\n", udphostname);
       exit(2);
     }
@@ -289,6 +298,7 @@ static void parse_args(int argc, char *argv[], struct relay **relays,
     (*relays)[i].tcpaddr.sin_addr = tcpaddr;
     (*relays)[i].tcpaddr.sin_port = htons(tcpport + i);
     (*relays)[i].tcpaddr.sin_family = AF_INET;
+    (*relays)[i].bound_mode = bound_mode;
   }
 } /* parse_args */
 
@@ -303,7 +313,7 @@ static void setup_udp_recv(struct relay *relay)
   struct sockaddr_in udp_recv_addr;
 
   if(udp_send_only) {
-    relay->udp_recv_sock=-1;
+    relay->udp_recv_sock=INVALID_SOCKET;
     return;
   }
 
@@ -372,7 +382,7 @@ static void setup_udp_recv(struct relay *relay)
 static void setup_udp_send(struct relay *relay)
 {
   if(udp_recv_only) {
-    relay->udp_send_sock=-1;
+    relay->udp_send_sock=INVALID_SOCKET;
     return;
   }
 
@@ -382,7 +392,10 @@ static void setup_udp_send(struct relay *relay)
     exit(1);
   }
 
-  if (connect(relay->udp_send_sock, (struct sockaddr *) &(relay->udpaddr),
+  if (bound_mode) {
+    /* nothing to see here */
+  }
+  else if (connect(relay->udp_send_sock, (struct sockaddr *) &(relay->udpaddr),
               sizeof(relay->udpaddr)) < 0) { 
     perror("setup_udp_send: connect");
     exit(1);
@@ -554,7 +567,6 @@ static int udp_to_tcp(struct relay *relay)
 {
   struct out_packet p;
   int buflen;
-  struct sockaddr_in remote_udpaddr;
   socklen_t addrlen = sizeof(remote_udpaddr);
 
   if ((buflen = recvfrom(relay->udp_recv_sock, p.buf, UDPBUFFERSIZE, 0,
@@ -624,7 +636,14 @@ static int tcp_to_udp(struct relay *relay)
             relay->packet_length);
   }
 
-  if (send(relay->udp_send_sock, relay->packet_start,
+  if (bound_mode) {
+    if (sendto(relay->udp_send_sock, relay->packet_start,
+           relay->packet_length, 0, (struct sockaddr*)&remote_udpaddr, sizeof(remote_udpaddr)) < 0) {
+      perror("tcp_to_udp: sendto");
+      return 1;
+    }
+  }
+  else if (send(relay->udp_send_sock, relay->packet_start,
            relay->packet_length, 0) < 0) {
     if (errno != ECONNREFUSED) {
       perror("tcp_to_udp: send");
@@ -676,6 +695,7 @@ int main(int argc, char *argv[])
       perror("WSAStartup failure.");
   }
 #endif
+  memset(&remote_udpaddr, 0, sizeof(remote_udpaddr));
 
   parse_args(argc, argv, &relays, &relay_count, &is_server);
 
