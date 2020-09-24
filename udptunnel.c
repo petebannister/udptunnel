@@ -43,12 +43,12 @@ typedef unsigned short u_int16;
 
 #ifdef _WIN32
 #define perror p_wsa_error
-#define exit wsa_exit
 
 static void wsa_exit(int code) {
   WSACleanup();
   exit(code);
 }
+#define exit wsa_exit
 
 static void p_wsa_error(char const* msg) {
   int ec = WSAGetLastError();
@@ -256,8 +256,10 @@ static void parse_args(int argc, char *argv[], struct relay **relays,
 
   udpaddr = host2ip(udphostname);
   if (udpaddr.s_addr == INADDR_ANY) {
-    fprintf(stderr, "%s: UDP host unknown\n", udphostname);
-    exit(2);
+    if (strcmp(udphostname, "0.0.0.0") != 0) { // <pb> allow all interfaces udp bind
+      fprintf(stderr, "%s: UDP host unknown\n", udphostname);
+      exit(2);
+    }
   }
 
   if (*is_server) {
