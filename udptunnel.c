@@ -113,6 +113,7 @@ static int debug = 0;
 static int udp_recv_only = 0;
 static int udp_send_only = 0;
 static int bound_mode = 0;
+static int server_mode = 0;
 static struct sockaddr_in remote_udpaddr;
 
 /*
@@ -120,7 +121,7 @@ static struct sockaddr_in remote_udpaddr;
  * Print the program usage info, and exit.
  */
 static void usage(char *progname) {
-  fprintf(stderr, "Usage: %s -s TCP-port [-r] [-v] UDP-addr/UDP-port[/ttl]\n",
+  fprintf(stderr, "Usage: %s -s TCP-port [-r] [-b] [-v] UDP-addr/UDP-port[/ttl]\n",
           progname);
   fprintf(stderr, "    or %s -c TCP-addr[/TCP-port] [-r] [-b] [-v] UDP-addr/UDP-port[/ttl]\n",
           progname);
@@ -206,7 +207,7 @@ static void parse_args(int argc, char *argv[], struct relay **relays,
             argv[0]);
     exit(2);
   }
-
+  server_mode = *is_server;
   if (argc <= optind) {
     usage(argv[0]);
   }
@@ -363,6 +364,10 @@ static void setup_udp_recv(struct relay *relay)
     /* XXX: some platforms don't allow you to bind to a multicast addr;
        these need to bind recv_addr to INADDR_ANY regardless? */
     udp_recv_addr.sin_addr.s_addr = INADDR_ANY;
+  }
+
+  if (bound_mode && server_mode && (relay->udpaddr.sin_addr.s_addr == 0)) {
+    udp_recv_addr.sin_port = 0; /* Use ephemeral port */
   }
 
   if (bind(relay->udp_recv_sock, (struct sockaddr *)&udp_recv_addr,
@@ -637,8 +642,15 @@ static int tcp_to_udp(struct relay *relay)
   }
 
   if (bound_mode) {
+    // TODO server mode - send to defined 
+    struct sockaddr* dst = (struct sockaddr*) &remote_udpaddr;
+    if (relay->udpaddr.sin_addr.s_addr != 0) {
+      if (server_mode) {
+        dst = (struct sockaddr*)&relay->udpaddr;
+      }
+    }
     if (sendto(relay->udp_send_sock, relay->packet_start,
-           relay->packet_length, 0, (struct sockaddr*)&remote_udpaddr, sizeof(remote_udpaddr)) < 0) {
+           relay->packet_length, 0, dst, sizeof(relay->udpaddr)) < 0) {
       perror("tcp_to_udp: sendto");
       return 1;
     }
