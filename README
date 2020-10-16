@@ -1,8 +1,11 @@
 Pete Bannister: Forked code to make this cross platform and compilable on Windows.
 Added CMake build also (required for Windows build).
 
-Added bound mode to enable this tunnel to act as a proxy over NAT where 
-UDP hole punching doesn't work properly.  i.e. Docker Linux containers on Windows.
+Added experimental bound mode to enable this tunnel to act as a proxy over NAT where 
+UDP hole punching doesn't work properly.  Warning: this is highly insecure and should 
+never be used in web-facing environment!
+
+The idea was to be able to tunnel UDP over TCP for Docker Linux containers on Windows.
 
 ----
 UDPTunnel by Jonathan Lennox; copyright 1999,2001 by Columbia University.
